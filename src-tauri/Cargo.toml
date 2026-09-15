@@ -1,0 +1,16 @@
+[package]
+name = "grammarbar"
+version = "0.1.0"
+edition = "2021"
+authors = ["TAB_mk"]
+repository = "https://github.com/TABmk/GrammarBar"
+description = "English grammar fixer for your Mac menu bar"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "macos-private-api", "image-png"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["process", "io-util", "sync", "time", "macros"] }

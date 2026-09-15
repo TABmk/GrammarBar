@@ -36,6 +36,11 @@ jobs:
         run: node scripts/prepare.mjs
       - run: npm test
       - run: npm run build -- -- --locked
+      - name: Sign and verify application
+        run: |
+          # Seal the app bundle while preserving the bundled Codex signatures.
+          codesign --force --sign - 'src-tauri/target/release/bundle/macos/GrammarBar.app'
+          codesign --verify --deep --strict --verbose=2 'src-tauri/target/release/bundle/macos/GrammarBar.app'
       - name: Package application
         env:
           ARCH: ${{ matrix.arch }}

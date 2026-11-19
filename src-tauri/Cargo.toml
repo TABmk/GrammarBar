@@ -1,6 +1,6 @@
 [package]
 name = "grammarbar"
-version = "1.1.0"
+version = "1.1.1"
 edition = "2021"
 authors = ["TAB_mk"]
 repository = "https://github.com/TABmk/GrammarBar"

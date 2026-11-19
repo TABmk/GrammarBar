@@ -1,7 +1,7 @@
 import { validateCorrection, visible } from './edits.js';
 const $ = id => document.getElementById(id);
 const invoke = (command, args) => window.__TAURI__?.core.invoke(command, args) ?? Promise.reject('Open the GrammarBar app.');
-let busy = false, connected = false, signingIn = false, confirmingLogout = false, polling = null, tooltipOwner = null;
+let busy = false, connected = false, signingIn = false, confirmingLogout = false, analyticsOn = true, view = 'editor', period = 30, insightsStale = true, confirmingClear = false, polling = null, tooltipOwner = null;
 let provider = null, savedProvider = null, savedModel = '', providers = [];
 const info = () => providers.find(p => p.id === provider);
 const status = (message = '', error = false, settings = false) => {
@@ -63,7 +63,7 @@ async function fix() {
   clearResult(); busy = true; sync(); status('Correcting…');
   const progress = window.__TAURI__ ? new window.__TAURI__.core.Channel() : null;
   if (progress) progress.onmessage = ({ done, total }) => { if (busy && total > 1) status(`Correcting… ${done}/${total}`); };
-  try { render(validateCorrection(source, await invoke('correct', { text: source, progress }))); }
+  try { render(validateCorrection(source, await invoke('correct', { text: source, progress }))); insightsStale = true; }
   catch (error) { status(String(error) === 'Cancelled' ? '' : String(error), String(error) !== 'Cancelled'); }
   finally { busy = false; sync(); }
 }
@@ -177,7 +177,8 @@ function openSettings() {
 }
 $('settings-button').addEventListener('click', openSettings);
 $('settings-dialog').addEventListener('close', () => {
-  document.body.classList.remove('settings-open'); $('source').focus();
+  document.body.classList.remove('settings-open'); if (view === 'editor') $('source').focus();
+  if (confirmingClear) { confirmingClear = false; renderClear(); }
   if (confirmingLogout) { confirmingLogout = false; status('', false, true); sync(); }
   // Closing without saving keeps the provider that corrections actually use.
   if (savedProvider && provider !== savedProvider) { $('provider').value = savedProvider; $('provider').dispatchEvent(new Event('change')); }
@@ -210,6 +211,7 @@ document.addEventListener('keydown', event => {
   if ($('settings-dialog').open) return;
   if (event.metaKey && event.key === 'Enter') { event.preventDefault(); fix(); }
   if (event.metaKey && event.key === ',') { event.preventDefault(); openSettings(); }
+  if (event.metaKey && analyticsOn && (event.key === '1' || event.key === '2')) { event.preventDefault(); setView(event.key === '1' ? 'editor' : 'insights'); }
   if (event.key === 'Escape') { event.preventDefault(); invoke('hide').catch(() => {}); }
 });
 $('changes').addEventListener('scroll', hideTip); window.addEventListener('resize', hideTip);
@@ -217,6 +219,7 @@ async function initialize() {
   try {
     const saved = await invoke('settings'); $('prompt').value = saved.prompt; $('speed').value = saved.speed || 'fast';
     $('appearance').value = saved.appearance || 'system';
+    analyticsOn = saved.analytics !== false; $('analytics').checked = analyticsOn; renderAnalyticsSwitch();
     invoke('launch_at_login').then(on => { $('launch-at-login').checked = on; }).catch(() => { $('launch-at-login').disabled = true; }); provider = savedProvider = saved.provider; savedModel = saved.model || '';
     if (saved.model) { $('model').add(new Option(saved.model, saved.model)); $('model').value = saved.model; }
     await loadProviders(false);
@@ -225,6 +228,120 @@ async function initialize() {
   } catch (error) { status(String(error), true); }
   sync();
 }
+// Insights: local statistics of the user's mistakes.
+const CATEGORY_NAMES = {
+  articles: 'Articles', prepositions: 'Prepositions', verb_forms: 'Verb forms & tense', agreement: 'Subject–verb agreement',
+  plurals: 'Singular & plural', pronouns: 'Pronouns', word_order: 'Word order', word_choice: 'Word choice', spelling: 'Spelling',
+  punctuation: 'Punctuation', capitalization: 'Capitalization', spacing: 'Spacing', clarity: 'Clarity', other: 'Other',
+};
+const categoryName = id => CATEGORY_NAMES[id] || CATEGORY_NAMES.other;
+const PERIOD_NAMES = { 7: 'the previous 7 days', 30: 'the previous 30 days' };
+const element = (tag, className, text) => { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; };
+const number = value => value.toLocaleString('en-US');
+const decimal = value => value.toLocaleString('en-US', { maximumFractionDigits: 1, minimumFractionDigits: value < 10 ? 1 : 0 });
+// Fewer mistakes is better, so a falling rate is shown as good news.
+function trend(rate, previous) {
+  if (rate == null || previous == null || previous === 0 && rate === 0) return null;
+  const change = previous === 0 ? 1 : (rate - previous) / previous;
+  if (Math.abs(change) < 0.05) return { text: 'Same as before', className: '' };
+  return { text: `${change < 0 ? '↓' : '↑'} ${Math.min(999, Math.round(Math.abs(change) * 100))}%`, className: change < 0 ? 'good' : 'bad' };
+}
+function sparkline(series) {
+  const svg = $('sparkline'); svg.replaceChildren();
+  const points = series.map((value, index) => [index, value]).filter(([, value]) => value != null);
+  if (points.length < 2) return;
+  const max = Math.max(...points.map(([, value]) => value), 0.1), step = 100 / Math.max(1, series.length - 1);
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+  path.setAttribute('points', points.map(([index, value]) => `${(index * step).toFixed(2)},${(22 - value / max * 20).toFixed(2)}`).join(' '));
+  path.setAttribute('vector-effect', 'non-scaling-stroke'); svg.append(path);
+}
+// "a → an" as a strike-through and an insertion; a lone insertion or deletion
+// (often one comma) is too small to see, so it is spelled out.
+function fixNode(original, replacement) {
+  const fix = element('span', 'fix');
+  if (!original) fix.append(element('span', 'fix-note', 'Missing '), element('ins', '', `“${replacement}”`));
+  else if (!replacement) fix.append(element('span', 'fix-note', 'Extra '), element('del', '', `“${original}”`));
+  else fix.append(element('del', '', original), element('ins', '', replacement));
+  return fix;
+}
+function renderInsights(data) {
+  const enough = data.checks >= 3;
+  $('insights-empty').hidden = enough; $('insights-body').hidden = !enough;
+  $('insights-caption').textContent = data.checks ? `${number(data.checks)} ${data.checks === 1 ? 'check' : 'checks'}` : '';
+  if (!enough) return;
+  $('tile-rate').textContent = data.rate == null ? '—' : decimal(data.rate);
+  const overall = trend(data.rate, data.previousRate);
+  $('tile-rate-trend').textContent = overall ? `${overall.text}${overall.text.startsWith('Same') ? '' : ` vs ${PERIOD_NAMES[period] || 'before'}`}` : '';
+  $('tile-rate-trend').className = `tile-sub ${overall?.className || ''}`;
+  sparkline(data.series);
+  $('tile-clean').textContent = data.cleanShare == null ? '—' : `${Math.round(data.cleanShare * 100)}%`;
+  $('tile-checks').textContent = `${number(data.errors)} ${data.errors === 1 ? 'mistake' : 'mistakes'} found`;
+  $('tile-words').textContent = number(data.words);
+  $('tile-style').textContent = data.styleCount ? `+ ${number(data.styleCount)} style ${data.styleCount === 1 ? 'suggestion' : 'suggestions'}` : 'No style suggestions';
+  const max = Math.max(1, ...data.categories.map(c => c.count));
+  $('categories').replaceChildren(...(data.categories.length ? data.categories.slice(0, 6).map(c => {
+    const row = element('div', 'bar-row');
+    const fill = element('span', 'bar-fill'); fill.style.width = `${Math.max(3, c.count / max * 100)}%`;
+    const bar = element('span', 'bar'); bar.append(fill);
+    const change = trend(c.rate, c.previousRate);
+    const count = element('span', 'bar-count', number(c.count));
+    if (change && change.className) { const arrow = element('span', `bar-trend ${change.className}`, change.text.slice(0, 1)); arrow.title = `${change.text} vs ${PERIOD_NAMES[period] || 'before'}`; count.prepend(arrow); }
+    row.append(element('span', 'bar-label', categoryName(c.id)), bar, count);
+    return row;
+  }) : [element('p', 'muted', 'No mistakes in this period.')]));
+  $('style-line').hidden = !data.style.length;
+  $('style-line').textContent = data.style.length ? `Style suggestions: ${data.style.slice(0, 3).map(s => `${categoryName(s.id).toLowerCase()} ${s.count}`).join(' · ')}` : '';
+  $('example').hidden = !data.example;
+  if (data.example) {
+    const fix = fixNode(data.example.original, data.example.replacement);
+    $('example').replaceChildren(element('span', 'example-title', `Latest ${categoryName(data.categories[0].id).toLowerCase()} mistake`), fix, element('span', 'example-text', data.example.explanation));
+  }
+  $('repeated').replaceChildren(...(data.repeated.length ? data.repeated.map(item => {
+    const row = element('li'); row.title = item.explanation;
+    row.append(fixNode(item.original, item.replacement), element('span', 'repeat-category', categoryName(item.category)), element('span', 'repeat-count', `×${item.count}`));
+    return row;
+  }) : [element('p', 'muted', 'Nothing repeated yet. The same fix made twice shows up here.')]));
+}
+async function loadInsights() {
+  try { renderInsights(await invoke('analytics', { days: period })); insightsStale = false; }
+  catch (error) { $('insights-caption').textContent = String(error); }
+}
+function setView(next) {
+  view = analyticsOn ? next : 'editor';
+  $('editor-view').hidden = view !== 'editor'; $('insights-view').hidden = view !== 'insights';
+  for (const tab of $('view-switch').querySelectorAll('button')) tab.setAttribute('aria-selected', String(tab.dataset.view === view));
+  hideTip();
+  if (view === 'insights' && insightsStale) loadInsights();
+  if (view === 'editor') $('source').focus();
+}
+for (const tab of $('view-switch').querySelectorAll('button')) tab.addEventListener('click', () => setView(tab.dataset.view));
+for (const button of $('period').querySelectorAll('button')) button.addEventListener('click', () => {
+  period = button.dataset.days ? Number(button.dataset.days) : null;
+  for (const other of $('period').querySelectorAll('button')) other.setAttribute('aria-pressed', String(other === button));
+  loadInsights();
+});
+function renderAnalyticsSwitch() {
+  $('view-switch').hidden = !analyticsOn;
+  if (!analyticsOn && view !== 'editor') setView('editor');
+}
+function renderClear() {
+  $('clear-analytics').textContent = confirmingClear ? 'Delete' : 'Clear Data';
+  $('clear-analytics').classList.toggle('destructive', confirmingClear);
+}
+$('analytics').addEventListener('change', async () => {
+  const box = $('analytics');
+  try {
+    await invoke('set_analytics', { enabled: box.checked }); analyticsOn = box.checked; renderAnalyticsSwitch();
+    status(analyticsOn ? '' : 'Statistics are no longer recorded. Clear Data deletes what was saved.', false, true);
+  } catch (error) { box.checked = !box.checked; status(String(error), true, true); }
+});
+$('clear-analytics').addEventListener('click', async () => {
+  if (!confirmingClear) { confirmingClear = true; renderClear(); status('This deletes all saved statistics. Click Delete to confirm.', false, true); return; }
+  confirmingClear = false; renderClear();
+  try { await invoke('clear_analytics'); insightsStale = true; status('Statistics deleted', false, true); }
+  catch (error) { status(String(error), true, true); }
+});
+
 initialize();
 
 for (const handle of document.querySelectorAll('.resize-handle')) {

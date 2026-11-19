@@ -174,20 +174,21 @@ fn locate(source: &str, changes: &[Change]) -> Vec<(Option<Range<usize>>, usize)
         .collect()
 }
 
-fn fallback_explanation(original: &str, replacement: &str) -> &'static str {
+/// Explanation and category for an edit the model did not list.
+fn fallback_explanation(original: &str, replacement: &str) -> (&'static str, &'static str) {
     let letters = |text: &str| {
         text.chars()
             .filter(|c| c.is_alphanumeric())
             .collect::<String>()
     };
     if original.trim().is_empty() && replacement.trim().is_empty() {
-        "Spacing."
+        ("Spacing.", "spacing")
     } else if letters(original) == letters(replacement) {
-        "Punctuation."
+        ("Punctuation.", "punctuation")
     } else if letters(original).to_lowercase() == letters(replacement).to_lowercase() {
-        "Capitalization."
+        ("Capitalization.", "capitalization")
     } else {
-        "Correction."
+        ("Correction.", "other")
     }
 }
 
@@ -197,7 +198,7 @@ fn explain(
     op: &Op,
     located: &[(Option<Range<usize>>, usize)],
     changes: &[Change],
-) -> String {
+) -> Explained {
     let (a, b) = (&op.a, &corrected[op.b.clone()]);
     let mut picked: Vec<usize> = located
         .iter()
@@ -230,17 +231,39 @@ fn explain(
         picked.extend(changes.iter().position(by_text));
     }
     let mut parts: Vec<&str> = Vec::new();
-    for index in picked {
+    for &index in &picked {
         let text = changes[index].explanation.trim();
         if !text.is_empty() && !parts.contains(&text) {
             parts.push(text);
         }
     }
     if parts.is_empty() {
-        fallback_explanation(&source[a.clone()], b).to_owned()
-    } else {
-        parts.join(" ")
+        let (text, category) = fallback_explanation(&source[a.clone()], b);
+        return Explained {
+            text: text.into(),
+            category,
+            kind: "error",
+        };
     }
+    // A merged edit is an error if any part of it is; its type is the first listed.
+    let first = &changes[picked[0]];
+    Explained {
+        text: parts.join(" "),
+        category: crate::edits::category(&first.category),
+        kind: if picked
+            .iter()
+            .any(|&i| crate::edits::kind(&changes[i].kind) == "error")
+        {
+            "error"
+        } else {
+            "style"
+        },
+    }
+}
+struct Explained {
+    text: String,
+    category: &'static str,
+    kind: &'static str,
 }
 
 pub fn align(source: &str, input: &Draft) -> Result<Vec<Segment>, String> {
@@ -319,13 +342,16 @@ pub fn align(source: &str, input: &Draft) -> Result<Vec<Segment>, String> {
             Segment {
                 original: original.into(),
                 replacement: original.into(),
-                explanation: String::new(),
+                ..Default::default()
             }
         } else {
+            let explained = explain(source, &corrected, op, &located, changes);
             Segment {
                 original: original.into(),
                 replacement: corrected[op.b.clone()].into(),
-                explanation: explain(source, &corrected, op, &located, changes),
+                explanation: explained.text,
+                category: explained.category.into(),
+                kind: explained.kind.into(),
             }
         };
         match segments.last_mut() {
@@ -352,6 +378,8 @@ mod tests {
                     original: original.into(),
                     replacement: replacement.into(),
                     explanation: explanation.into(),
+                    category: "word_choice".into(),
+                    kind: "error".into(),
                 })
                 .collect(),
         }

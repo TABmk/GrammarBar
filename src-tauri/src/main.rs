@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod align;
+mod analytics;
 mod chunks;
 mod claude;
 mod cli;
@@ -40,6 +41,9 @@ struct Settings {
     /// "system" (default), "light" or "dark".
     #[serde(default)]
     appearance: Option<String>,
+    /// Mistake statistics; on unless turned off.
+    #[serde(default)]
+    analytics: Option<bool>,
 }
 impl Settings {
     fn provider(&self) -> Option<Provider> {
@@ -51,6 +55,9 @@ impl Settings {
     }
     fn effort(&self) -> Option<&'static str> {
         (self.speed.as_deref() != Some("thorough")).then_some("low")
+    }
+    fn analytics(&self) -> bool {
+        self.analytics.unwrap_or(true)
     }
     fn appearance(&self) -> &'static str {
         match self.appearance.as_deref() {
@@ -86,6 +93,9 @@ impl AppState {
         }
         cached.clone().unwrap_or_default()
     }
+    fn analytics_path(&self) -> PathBuf {
+        self.directory.join("analytics.jsonl")
+    }
     fn workspace(&self) -> PathBuf {
         self.directory.join("workspace")
     }
@@ -114,6 +124,7 @@ impl AppState {
                 provider: None,
                 speed: None,
                 appearance: None,
+                analytics: None,
             });
         }
         let mut settings: Settings =
@@ -152,7 +163,27 @@ fn settings(state: State<AppState>) -> Result<Value, String> {
         "provider": settings.provider().map(Provider::id),
         "speed": if settings.effort().is_some() { "fast" } else { "thorough" },
         "appearance": settings.appearance(),
+        "analytics": settings.analytics(),
     }))
+}
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+#[tauri::command]
+fn set_analytics(enabled: bool, state: State<AppState>) -> Result<(), String> {
+    let mut settings = state.read_settings()?;
+    settings.analytics = Some(enabled);
+    state.write_settings(&settings)
+}
+#[tauri::command]
+fn analytics(days: Option<u64>, state: State<AppState>) -> Value {
+    analytics::summary(&state.analytics_path(), days, now())
+}
+#[tauri::command]
+fn clear_analytics(state: State<AppState>) -> Result<(), String> {
+    analytics::clear(&state.analytics_path())
 }
 /// Applied and saved right away, like a native switch.
 #[tauri::command]
@@ -414,6 +445,7 @@ fn unchanged(part: &str) -> Vec<edits::Segment> {
         original: part.into(),
         replacement: part.into(),
         explanation: String::new(),
+        ..Default::default()
     }]
 }
 type PartResult = Result<Vec<edits::Segment>, String>;
@@ -576,9 +608,15 @@ async fn correct(
         parts: total,
     };
     let mut first_error = None;
+    let mut checked: Vec<(&str, Vec<edits::Segment>)> = Vec::new();
     for (part, result) in parts.iter().zip(results?) {
         match result.unwrap_or_else(|| Err("Could not correct the text.".into())) {
-            Ok(segments) => correction.segments.extend(segments),
+            Ok(segments) => {
+                if settings.analytics() {
+                    checked.push((part, segments.clone()));
+                }
+                correction.segments.extend(segments)
+            }
             Err(error) => {
                 // Keep the part as written; the UI says it was not checked.
                 correction.failed += 1;
@@ -591,6 +629,12 @@ async fn correct(
         return Err(first_error.unwrap_or_else(|| "Could not correct the text.".into()));
     }
     correction.validate(&text)?;
+    let checked: Vec<(&str, &[edits::Segment])> =
+        checked.iter().map(|(p, s)| (*p, s.as_slice())).collect();
+    // Statistics are a side feature: a write error never fails the correction.
+    if let Err(error) = analytics::record(&state.analytics_path(), &checked, now()) {
+        eprintln!("{error}");
+    }
     Ok(correction)
 }
 #[tauri::command]
@@ -843,7 +887,10 @@ fn main() {
             copy,
             set_appearance,
             launch_at_login,
-            set_launch_at_login
+            set_launch_at_login,
+            set_analytics,
+            analytics,
+            clear_analytics
         ])
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,

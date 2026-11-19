@@ -352,6 +352,17 @@ mod tests {
             assert!(segments.iter().any(|s| s.original != s.replacement));
             let original: String = segments.iter().map(|s| s.original.as_str()).collect();
             assert_eq!(original, text);
+            // Every listed change carries a known type, and edits keep it.
+            assert!(draft
+                .changes
+                .iter()
+                .all(|c| crate::edits::CATEGORIES.contains(&c.category.as_str())
+                    && matches!(c.kind.as_str(), "error" | "style")));
+            println!("{:?}", draft.changes);
+            assert!(segments
+                .iter()
+                .filter(|s| s.original != s.replacement)
+                .all(|s| !s.category.is_empty() && !s.kind.is_empty()));
         });
     }
 

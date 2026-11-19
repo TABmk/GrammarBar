@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/grammarbar.png" width="900" alt="GrammarBar showing original English text, corrected text, red and green changes, and an explanation of a grammar correction.">
+  <img src="docs/grammarbar.png" width="746" alt="GrammarBar panel with the original text, the corrected text, and each change shown in red and green.">
 </p>
 
 ## Quick Start
@@ -24,6 +24,7 @@
 3. Unzip GrammarBar, move **GrammarBar.app** to **Applications**, and open it.
 4. Click the GrammarBar menu-bar icon, open **Settings**, choose a provider and press **Connect**. If the provider is not installed, Settings links to its install page. Save your instructions and preferred model.
 5. Paste your text and press **Correct** or **⌘↵**. Hover over a change to see its explanation.
+6. Switch to **Insights** (**⌘2**) to see which mistakes you make most often.
 
 ## Features
 
@@ -34,16 +35,28 @@
 - **Explanations on hover** — understand the reason behind each correction.
 - **A compact workspace** — resize the window vertically; changes appear only when present.
 - **Copy and clear** — copy the result or clear all text for your next message.
+- **Insights** — see your most frequent mistake types, the fixes you keep repeating, and whether your mistakes per 100 words go down. Kept only on your Mac; can be turned off.
+- **Fits your Mac** — light or dark appearance, and an option to open at login.
+
+<p align="center">
+  <img src="docs/insights.png" width="746" alt="Insights tab: mistakes per 100 words with a trend, share of texts without mistakes, words checked, mistake types, and repeated mistakes.">
+</p>
+
+<p align="center">
+  <img src="docs/settings.png" width="746" alt="Settings: provider, account, model, speed, and correction instructions, with general options below.">
+</p>
 
 <details>
 <summary><strong>Providers and privacy</strong></summary>
 
 GrammarBar bundles no AI runtime. It looks for `claude` and `codex` in your login-shell `PATH` and in common install folders (`~/.local/bin`, Homebrew, npm, Bun, Volta). Press **Check again** in Settings after installing one.
 
-- **Claude** runs through the official Claude Code CLI (`claude -p`). Sign-in is done by `claude auth login`, so GrammarBar never handles Claude credentials and shares the sign-in with your terminal. If the browser shows a code after sign-in, paste it into Settings. Models come from the account Claude Code is signed in to. To sign out, run `claude auth logout`.
+- **Claude** runs through the official Claude Code CLI (`claude -p`). Sign-in is done by `claude auth login`, so GrammarBar never handles Claude credentials and shares the sign-in with your terminal. If the browser shows a code after sign-in, paste it into Settings. Models come from the account Claude Code is signed in to. **Disconnect** in Settings runs `claude auth logout`, which also signs Claude Code out in your terminal, so GrammarBar asks first.
 - **ChatGPT** runs through the official Codex App Server (`codex app-server`) over local stdio. It does not automate the ChatGPT website.
 
-Text is submitted for correction only when you press **Correct**. Corrections run in fresh, non-persistent sessions, and the editor does not save a text history. Filesystem, shell, web, MCP and other tools are disabled; unexpected tool requests are refused.
+Text is submitted for correction only when you press **Correct**. Corrections run in fresh, non-persistent sessions, and the editor does not save a text history.
+
+**Insights** (on by default, Settings → Mistake statistics) stores, for each checked part, the date, its word count and each change: the changed fragment (up to 60 characters), its replacement, explanation, mistake type, and whether it was an error or a style suggestion. The checked text itself is not stored; only hashes of it are kept, so re-checking the same text, or GrammarBar's own corrected output, is not counted twice. Data stays in `analytics.jsonl` next to the settings and is never sent anywhere. Turning the switch off stops recording; **Clear Data** deletes the file. Filesystem, shell, web, MCP and other tools are disabled; unexpected tool requests are refused.
 
 Codex stores credentials in macOS Keychain using an app-specific home. Settings live in `~/Library/Application Support/com.tabmk.grammarbar/settings.json`. Existing installations keep the legacy `local.textfixer` directory to preserve sign-in and settings.
 

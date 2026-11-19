@@ -13,7 +13,7 @@
         "label": "main",
         "title": "GrammarBar",
         "width": 700,
-        "height": 380,
+        "height": 420,
         "minWidth": 700,
         "minHeight": 380,
         "visible": false,
@@ -23,7 +23,15 @@
         "alwaysOnTop": true,
         "center": false,
         "transparent": true,
-        "shadow": false
+        "shadow": true,
+        "windowEffects": {
+          "effects": [
+            "liquidGlassRegular",
+            "popover"
+          ],
+          "state": "active",
+          "radius": 18
+        }
       }
     ],
     "security": {
@@ -35,9 +43,6 @@
     "active": true,
     "targets": [
       "app"
-    ],
-    "resources": [
-      "resources/codex-runtime/"
     ],
     "macOS": {
       "minimumSystemVersion": "12.0",

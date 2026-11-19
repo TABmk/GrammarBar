@@ -32,13 +32,11 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install stable --profile minimal && rustup default stable
       - run: npm ci
-      - name: Prepare bundled runtime
-        run: node scripts/prepare.mjs
       - run: npm test
       - run: npm run build -- -- --locked
       - name: Sign and verify application
         run: |
-          # Seal the app bundle while preserving the bundled Codex signatures.
+          # Ad-hoc seal the app bundle.
           codesign --force --sign - 'src-tauri/target/release/bundle/macos/GrammarBar.app'
           codesign --verify --deep --strict --verbose=2 'src-tauri/target/release/bundle/macos/GrammarBar.app'
       - name: Package application

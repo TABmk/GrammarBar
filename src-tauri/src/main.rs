@@ -671,7 +671,11 @@ fn resize_height(window: tauri::WebviewWindow, height: f64) -> Result<(), String
 #[tauri::command]
 fn copy(text: String) -> Result<(), String> {
     use std::io::Write;
+    // Apps opened from Finder get no LANG, and pbcopy then reads its input as
+    // Mac Roman: a non-breaking space would paste as "¬†", quotes as "‚Äú".
     let mut child = std::process::Command::new("/usr/bin/pbcopy")
+        .env("LC_ALL", "en_US.UTF-8")
+        .env("LANG", "en_US.UTF-8")
         .stdin(std::process::Stdio::piped())
         .spawn()
         .map_err(|_| "Could not copy text.")?;
